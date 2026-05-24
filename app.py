@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
 from nsepython import nse_optionchain_scrapper
-import json
+import yfinance as yf
 
-st.set_page_config(page_title="Pro Free AI Option Chain Workspace", layout="wide")
+st.set_page_config(page_title="AI Option Chain & Swing Trading Desk", layout="wide")
 
-# --- MATHEMATICAL CALCULATIONS ENGINE ---
+# --- MATHEMATICAL CALCULATIONS ENGINE (OPTIONS) ---
 def compute_max_pain(rows_df):
     min_pain = float('inf')
     mp = 0
@@ -20,48 +20,20 @@ def compute_max_pain(rows_df):
             mp = s
     return mp
 
-# --- DATA FULFILLMENT MATRIX WITH AFTER-MARKET FALLBACK ---
-def fetch_option_chain_data(symbol, operational_mode):
+# --- DATA FULFILLMENT: LIVE INTRADAY OPTION CHAIN ---
+def fetch_option_chain_data(symbol):
     try:
         payload = nse_optionchain_scrapper(symbol)
-        
-        # Fallback Check: If NSE sends blank data because the market is closed
-        if not payload or 'records' not in payload or len(payload.get('records', {}).get('data', [])) == 0:
-            if operational_mode == "After-Market Setup / Swing Trading":
-                st.warning("⚠️ NSE Live Option Chain is down for maintenance/weekend closure. Generating a simulated structural model based on standard thresholds for planning.")
-                # Creating an off-market structural template so your app doesn't break
-                sim_spot = 22000.0 if symbol == "NIFTY" else 47000.0
-                step = 50 if symbol == "NIFTY" else 100
-                sim_atm = round(sim_spot / step) * step
-                
-                rows = []
-                for i in range(-15, 16):
-                    strike_val = sim_atm + (i * step)
-                    rows.append({
-                        'strike': float(strike_val),
-                        'ce_oi': float(50000 - abs(i)*2000 if i >=0 else 20000),
-                        'ce_ltp': float(max(10, 150 - i*15)),
-                        'pe_oi': float(50000 - abs(i)*2000 if i <=0 else 20000),
-                        'pe_ltp': float(max(10, 150 + i*15))
-                    })
-                df = pd.DataFrame(rows).sort_values('strike')
-                return {
-                    "spot": sim_spot, "atm": sim_atm, "expiry": "Next Active Expiry", "max_pain": sim_atm,
-                    "pcr": 1.0, "pcr_label": "NEUTRAL", "resistance": sim_atm + (2*step), "support": sim_atm - (2*step), "df": df
-                }
-            else:
-                return None
+        if not payload or 'records' not in payload:
+            return None
             
         records = payload.get('records', {})
         spot = records.get('underlyingValue', 0)
         expiries = records.get('expiryDates', [])
-        
-        # If weekend, the first expiry might be expired, check list safety
         nearest_expiry = expiries[0] if expiries else ''
-        raw_data = records.get('data', [])
         
         rows = []
-        for item in raw_data:
+        for item in records.get('data', []):
             if item.get('expiryDate') != nearest_expiry:
                 continue
             strike = item.get('strikePrice', 0)
@@ -100,107 +72,144 @@ def fetch_option_chain_data(symbol, operational_mode):
             "pcr": pcr, "pcr_label": pcr_label, "resistance": resistance, "support": support, "df": df
         }
     except Exception as e:
-        st.error(f"NSE Server API Busy or Empty Profile: {e}")
         return None
 
-# --- AI SIGNALS SYSTEM GENERATOR ---
-def generate_ai_trade_recommendation(m, operational_mode):
-    reco = {}
-    if operational_mode == "Live Intraday Tracking":
-        if m['pcr'] > 1.15:
-            reco['signal'] = "🚀 STRONG BUY (BULLISH INTRADAY)"
-            reco['strategy'] = f"Bull Call Spread or Long ATM Call near {m['atm']}"
-            reco['target'] = f"{m['resistance']}"
-            reco['stop'] = f"{m['atm'] - 50 if asset == 'NIFTY' else m['atm'] - 150}"
-            reco['rationale'] = f"Intraday PCR is high at {m['pcr']}. Options volume suggests heavy accumulation of puts protecting the floor. Rapid upward breakout expected."
-        elif m['pcr'] < 0.85:
-            reco['signal'] = "📉 STRONG SHORT (BEARISH INTRADAY)"
-            reco['strategy'] = f"Bear Put Spread or Long ATM Put near {m['atm']}"
-            reco['target'] = f"{m['support']}"
-            reco['stop'] = f"{m['atm'] + 50 if asset == 'NIFTY' else m['atm'] + 150}"
-            reco['rationale'] = f"Bearish sentiment dominating. Major call writers have built a massive ceiling at {m['resistance']} preventing upside movement."
-        else:
-            reco['signal'] = "🔄 RANGEBOUND (NEUTRAL INTRADAY)"
-            reco['strategy'] = f"Short Straddle or Iron Condor centered at ATM {m['atm']}"
-            reco['target'] = f"{m['max_pain']}"
-            reco['stop'] = "Exit if indices violate support/resistance boundaries on heavy volume."
-            reco['rationale'] = f"Balanced market layout. Options premiums are decaying directly toward the Max Pain center gravity point at {m['max_pain']}."
-    else:
-        # Swing trade setups / after-market models
-        if m['pcr'] > 1.0:
-            reco['signal'] = "📈 SWING POSITION: POSITION LONG"
-            reco['strategy'] = f"Positional Bullish Spread: Sell Put options below safety cushion {m['support']}"
-            reco['target'] = f"{m['resistance'] + 100}"
-            reco['stop'] = f"Daily closing price drops below {m['support']}"
-            reco['rationale'] = "Multi-day open interest structures show long positions building up. Safe premium collection strategies exist well below the primary support cluster."
-        else:
-            reco['signal'] = "📉 SWING POSITION: POSITION SHORT"
-            reco['strategy'] = f"Positional Bearish Spread: Sell Call options above risk threshold {m['resistance']}"
-            reco['target'] = f"{m['support'] - 100}"
-            reco['stop'] = f"Daily closing price breaks above {m['resistance']}"
-            reco['rationale'] = "After-hours distribution trends indicate resistance overhead. Collecting premium behind the key call walls offers high-probability swing decay."
+# --- DATA FULFILLMENT: REAL STOCKS DATA FOR SWING TRADING ---
+def fetch_swing_stock_data(stock_ticker):
+    try:
+        # Appends .NS automatically for National Stock Exchange tickers
+        ticker = f"{stock_ticker}.NS"
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="1y") # Fetch past 1 year to analyze trends securely
+        
+        if hist.empty:
+            return None
             
-    return reco
+        latest_close = hist['Close'].iloc[-1]
+        prev_close = hist['Close'].iloc[-2]
+        daily_pct_change = ((latest_close - prev_close) / prev_close) * 100
+        
+        # Calculate key technical pillars for swing trades
+        ma_50 = hist['Close'].rolling(window=50).mean().iloc[-1]
+        ma_200 = hist['Close'].rolling(window=200).mean().iloc[-1]
+        
+        # Simple volume spike tracker
+        avg_volume = hist['Volume'].tail(20).mean()
+        latest_volume = hist['Volume'].iloc[-1]
+        volume_spike = latest_volume / avg_volume
+        
+        return {
+            "close": latest_close,
+            "change": daily_pct_change,
+            "ma50": ma_50,
+            "ma200": ma_200,
+            "volume_mult": volume_spike,
+            "raw_hist": hist.tail(10) # Send last 10 days table data
+        }
+    except Exception as e:
+        st.error(f"Error fetching stock rows: {e}")
+        return None
 
 # --- MAIN SURFACE APPLICATION LAYOUT ---
-st.title("📊 Professional AI Derivative Analytics Platform")
+st.title("📈 Advanced AI Options & Swing Trading Hub")
 
-with st.expander("ℹ️ Click here for the Enhanced Interactive App User Guide"):
+# USER TRAINING PLAYBOOK EXPANDER
+with st.expander("ℹ️ Click here for the Updated User Guide"):
     st.markdown("""
-    ### 🧭 Quick Training Playbook
-    1. **Asset Selection:** Use the dropdown menu below to select **NIFTY** or **BANKNIFTY**.
-    2. **Operational Framework Mode:** * Select **Live Intraday Tracking** during active trading hours (9:15 AM - 3:30 PM IST) for fast data feeds.
-       * Select **After-Market Setup / Swing Trading** after hours or on weekends to look at positional ranges without causing software crashes.
-    3. **AI Signal Interpretation:** Use the strategy layouts to construct hedge setups rather than entering raw single options blindly.
+    ### 🧭 How to Navigate the Modes:
+    1. **Live Intraday Tracking Mode:** Select this during market hours (9:15 AM - 3:30 PM). It analyzes the Index Option Chain (PCR, Max Pain) to find fast momentum.
+    2. **After-Market Setup / Swing Trading Mode:** Select this after hours or over weekends. It switches to **Actual Stocks / Shares**. It analyzes support levels using moving averages and volume breakouts to pick trades you can hold for days or weeks.
     """)
 
-st.markdown("### ⚙️ Workspace Control Controls")
-c_col1, c_col2 = st.columns(2)
-with c_col1:
-    asset = st.selectbox("Select Target Trading Index", ["NIFTY", "BANKNIFTY"])
-with c_col2:
-    app_mode = st.radio("Choose Operational Context Field:", ["Live Intraday Tracking", "After-Market Setup / Swing Trading"])
+# APP SYSTEM CONTROLS
+st.markdown("### ⚙️ Workspace Configuration Control")
+app_mode = st.radio("Choose Your Active Trading Field Context:", ["Live Intraday Tracking", "After-Market Setup / Swing Trading"], horizontal=True)
 
 st.markdown("---")
 
-if st.button("🔄 Execute Option Chain Analysis Stream"):
-    with st.spinner("Processing data matrix configuration..."):
-        metrics = fetch_option_chain_data(asset, app_mode)
-        
-        if metrics:
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Underlying Spot Price", f"₹ {metrics['spot']:.2f}")
-            m2.metric("ATM Center Strike", f"{metrics['atm']:,}")
-            m3.metric("Option Chain PCR", f"{metrics['pcr']}", f"Bias: {metrics['pcr_label']}")
-            m4.metric("Computed Max Pain", f"{metrics['max_pain']:,}")
+# --- MODE 1: LIVE INTRADAY OPTION CHAIN ---
+if app_mode == "Live Intraday Tracking":
+    asset = st.selectbox("Select Derivative Index Index", ["NIFTY", "BANKNIFTY"])
+    
+    if st.button("🔄 Execute Live Option Analysis"):
+        with st.spinner("Streaming real-time option blocks..."):
+            metrics = fetch_option_chain_data(asset)
             
-            st.markdown("---")
+            if metrics:
+                # Dashboard Cards
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Underlying Spot Price", f"₹ {metrics['spot']:.2f}")
+                m2.metric("ATM Center Strike", f"{metrics['atm']:,}")
+                m3.metric("Option Chain PCR", f"{metrics['pcr']}", f"Bias: {metrics['pcr_label']}")
+                m4.metric("Computed Max Pain", f"{metrics['max_pain']:,}")
+                
+                # AI Signaling Room
+                st.subheader("🎯 Automated AI Intraday Trading Signal")
+                if metrics['pcr'] > 1.15:
+                    st.success("🚀 **AI Signal: STRONG BULLISH INTRADAY MOMENTUM**")
+                    st.info(f"**Strategy:** Buy ATM Call Option near {metrics['atm']} or deploy a Bull Call Spread. \n\n**Target:** ₹ {metrics['resistance']} | **Stop Loss:** ₹ {metrics['atm'] - 50 if asset == 'NIFTY' else metrics['atm'] - 150}")
+                elif metrics['pcr'] < 0.85:
+                    st.error("📉 **AI Signal: STRONG BEARISH INTRADAY PRESSURE**")
+                    st.info(f"**Strategy:** Buy ATM Put Option near {metrics['atm']} or deploy a Bear Put Spread. \n\n**Target:** ₹ {metrics['support']} | **Stop Loss:** ₹ {metrics['atm'] + 50 if asset == 'NIFTY' else metrics['atm'] + 150}")
+                else:
+                    st.warning("🔄 **AI Signal: RANGEBOUND / NEUTRAL MARKET**")
+                    st.info(f"**Strategy:** Sell option premiums out-of-the-money or deploy an Iron Condor. \n\n**Target Target:** Expect settlement decay approaching the Max Pain point at {metrics['max_pain']}.")
+                
+                # Table Data View
+                st.subheader("📋 Sliced Options Matrix View")
+                grid = metrics['df'].copy()
+                strikes = sorted(grid['strike'].tolist())
+                atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - metrics['spot']))
+                final_grid = grid[grid['strike'].isin(strikes[max(0, atm_idx-5):min(len(strikes), atm_idx+6)])].copy()
+                final_grid.columns = ['Strike Price', 'CE Open Interest', 'CE LTP (₹)', 'PE Open Interest', 'PE LTP (₹)']
+                st.dataframe(final_grid[['CE Open Interest', 'CE LTP (₹)', 'Strike Price', 'PE LTP (₹)', 'PE Open Interest']], use_container_width=True)
+            else:
+                st.error("NSE Live servers are currently offline or busy. If the market is closed, please switch to 'After-Market Setup / Swing Trading' above.")
+
+# --- MODE 2: AFTER-MARKET / SWING TRADING INDIVIDUAL STOCKS ---
+else:
+    st.markdown("### 🦅 Swing Stock Analysis Panel")
+    stock_choice = st.selectbox("Select Blue-Chip Stock to Evaluate for Next-Day / Swing Setup:", ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "SBIN"])
+    
+    if st.button("🔍 Scan Stock for Swing Trade Structure"):
+        with st.spinner(f"Extracting server delivery data profiles for {stock_choice}..."):
+            s_data = fetch_swing_stock_data(stock_choice)
             
-            st.subheader("🎯 Automated AI Algorithmic Trade Signal Room")
-            ai_data = generate_ai_trade_recommendation(metrics, app_mode)
-            
-            box_color = "🟢" if "BUY" in ai_data['signal'] or "LONG" in ai_data['signal'] else ("🔴" if "SHORT" in ai_data['signal'] else "🟡")
-            
-            st.markdown(f"### {box_color} **AI System Signal: {ai_data['signal']}**")
-            
-            a_col1, a_col2, a_col3 = st.columns(3)
-            a_col1.info(f"🛠️ **Recommended Strategy Deployment:**\n\n{ai_data['strategy']}")
-            a_col2.success(f"🎯 **Target Level Boundary:**\n\n₹ {ai_data['target']}")
-            a_col3.error(f"🛑 **Invalidation Stop Level:**\n\n{ai_data['stop']}")
-            
-            st.warning(f"📝 **AI Structural Rationale Analysis:**\n\n{ai_data['rationale']}")
-            
-            st.markdown("---")
-            
-            st.subheader(f"📋 Option Chain Slices around ATM (Nearest Expiry: {metrics['expiry']})")
-            grid = metrics['df'].copy()
-            strikes = sorted(grid['strike'].tolist())
-            atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - metrics['spot']))
-            
-            final_grid = grid[grid['strike'].isin(strikes[max(0, atm_idx-6):min(len(strikes), atm_idx+7)])].copy()
-            final_grid.columns = ['Strike Price', 'CE Open Interest', 'CE LTP (₹)', 'PE Open Interest', 'PE LTP (₹)']
-            final_grid = final_grid[['CE Open Interest', 'CE LTP (₹)', 'Strike Price', 'PE LTP (₹)', 'PE Open Interest']]
-            
-            st.dataframe(final_grid.style.highlight_max(axis=0, subset=['CE Open Interest', 'PE Open Interest'], color='#f0fdf4'), use_container_width=True)
-        else:
-            st.error("NSE Live data is currently empty. Please switch the toggle on the right to 'After-Market Setup / Swing Trading' to run off-market analytics smoothly.")
+            if s_data:
+                # Dashboard Cards
+                s1, s2, s3, s4 = st.columns(4)
+                s1.metric("Closing Share Price", f"₹ {s_data['close']:.2f}", f"{s_data['change']:.2f}% Change")
+                s2.metric("50-Day Moving Avg (Short Trend)", f"₹ {s_data['ma50']:.2f}")
+                s3.metric("200-Day Moving Avg (Long Trend)", f"₹ {s_data['ma200']:.2f}")
+                s4.metric("Volume Multiplier vs Average", f"{s_data['volume_mult']:.2f}x")
+                
+                st.markdown("---")
+                
+                # AI Swing Advice Logic System
+                st.subheader("🤖 AI Algorithmic Swing Trading Recommendation")
+                
+                # Rule 1: Buying pullbacks in a strong long term uptrend
+                if s_data['close'] > s_data['ma200'] and s_data['close'] <= (s_data['ma50'] * 1.02) and s_data['close'] >= (s_data['ma50'] * 0.98):
+                    st.success("🟢 **AI SWING SETUP: HIGH PROBABILITY BUY ON PULLBACK**")
+                    st.write(f"**Action Plan:** Enter swing long position near current price of ₹{s_data['close']:.2f}. The stock is resting right on its 50-Day Moving Average Support within a macro uptrend.")
+                    st.write(f"🎯 **Target:** ₹ {s_data['close'] * 1.06:.2f} (6% Upside Move) | 🛑 **Stop Loss:** ₹ {s_data['ma50'] * 0.96:.2f} (Closing Basis)")
+                    
+                # Rule 2: Volume breakout entry
+                elif s_data['close'] > s_data['ma50'] and s_data['volume_mult'] > 1.5:
+                    st.success("🚀 **AI SWING SETUP: VOLUME BREAKOUT VALIDATED**")
+                    st.write(f"**Action Plan:** Momentum swing entry. The stock closing today showed an institutional volume spike of `{s_data['volume_mult']:.2f}x` regular averages. High chance of continuation tomorrow.")
+                    st.write(f"🎯 **Target:** ₹ {s_data['close'] * 1.08:.2f} (8% Breakout Run) | 🛑 **Stop Loss:** ₹ {s_data['close'] * 0.95:.2f}")
+                    
+                # Rule 3: No clear setup / wait
+                else:
+                    st.warning("🟡 **AI SWING SETUP: NEUTRAL COOLDOWN ZONE (WATCHLIST ONLY)**")
+                    st.write("**Action Plan:** Do not enter a trade immediately. The share price is floating between core trend levels without an explicit volume breakout trigger. Keep on watchlist and wait for a pullback closer to major moving average baselines.")
+                
+                # Display Historical Data Grid 
+                st.markdown("---")
+                st.subheader("📊 Recent 10-Day Closing Prices Historical Log")
+                raw_grid = s_data['raw_hist'].copy()
+                raw_grid.index = raw_grid.index.strftime('%Y-%m-%d')
+                st.dataframe(raw_grid[['Open', 'High', 'Low', 'Close', 'Volume']], use_container_width=True)
+            else:
+                st.error("Failed to collect historical price matrix. Please verify internet connection protocols.")
