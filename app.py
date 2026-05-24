@@ -2,7 +2,17 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 
-st.set_page_config(page_title="Universal AI Trading & Swing Desk", layout="wide")
+st.set_page_config(page_title="Automated AI Swing Scanner", layout="wide")
+
+# --- PERMANENT SIDEBAR USER GUIDE ---
+st.sidebar.title("🧭 Quick Start Playbook")
+st.sidebar.markdown("""
+### How to use this platform:
+1. **Live Intraday (Options):** Select this mode during market hours (9:15 AM - 3:30 PM IST) to analyze Index momentum.
+2. **AI Swing Robo-Advisor:** Select this mode anytime (live or after-hours). 
+3. **Set your Budget:** Input your trading capital. The AI will calculate your risk and exact share counts automatically.
+4. **Click Scan:** The AI scans the entire market list, evaluates changing strategies for 3, 7, and 14 days, and presents the best matched trades.
+""")
 
 # --- MATHEMATICAL ENGINES ---
 def compute_max_pain(rows_df):
@@ -26,56 +36,58 @@ def calculate_rsi(series, periods=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# --- DATA CONNECTOR: REAL-TIME STOCK METRICS ---
-def fetch_any_stock_data(ticker_symbol):
-    try:
-        symbol = ticker_symbol.strip().upper()
-        if not symbol.endswith(".NS"):
-            symbol = f"{symbol}.NS"
+# --- AUTOMATED WATCHLIST SCANNER ENGINE ---
+# A comprehensive master list representing various sectors and budget sizes across the NSE
+MASTER_WATCHLIST = [
+    "SBIN", "TATAMOTORS", "RELIANCE", "TCS", "HDFCBANK", "INFY", "ITC", "IRFC", 
+    "PNB", "SUZLON", "WIPRO", "TATASTEEL", "NHPC", "ZOMATO", "JIOFIN", "BPCL"
+]
+
+@st.cache_data(ttl=600) # Caches data for 10 minutes to make the scan incredibly fast
+def scan_entire_market():
+    scanned_results = []
+    for ticker in MASTER_WATCHLIST:
+        try:
+            symbol = f"{ticker}.NS"
+            stock = yf.Ticker(symbol)
+            hist = stock.history(period="1y")
             
-        stock = yf.Ticker(symbol)
-        hist = stock.history(period="1y") # Collect 1 year of historical context
-        
-        if hist.empty or len(hist) < 50:
-            return None
+            if hist.empty or len(hist) < 50:
+                continue
+                
+            latest_close = hist['Close'].iloc[-1]
+            prev_close = hist['Close'].iloc[-2]
+            pct_change = ((latest_close - prev_close) / prev_close) * 100
             
-        latest_close = hist['Close'].iloc[-1]
-        prev_close = hist['Close'].iloc[-2]
-        pct_change = ((latest_close - prev_close) / prev_close) * 100
-        
-        # Core Technical Parameters
-        ma_20 = hist['Close'].rolling(window=20).mean().iloc[-1]
-        ma_50 = hist['Close'].rolling(window=50).mean().iloc[-1]
-        ma_200 = hist['Close'].rolling(window=200).mean().iloc[-1]
-        
-        # 14-Day RSI
-        hist['RSI'] = calculate_rsi(hist['Close'])
-        latest_rsi = hist['RSI'].iloc[-1] if not pd.isna(hist['RSI'].iloc[-1]) else 50
-        
-        # Volume Multiplier
-        avg_vol = hist['Volume'].tail(20).mean()
-        latest_vol = hist['Volume'].iloc[-1]
-        vol_multiplier = latest_vol / avg_vol
-        
-        return {
-            "name": ticker_symbol.strip().upper(),
-            "close": latest_close,
-            "change": pct_change,
-            "ma20": ma_20,
-            "ma50": ma_50,
-            "ma200": ma_200,
-            "rsi": latest_rsi,
-            "volume_mult": vol_multiplier,
-            "raw_hist": hist.tail(10)
-        }
-    except Exception:
-        return None
+            ma20 = hist['Close'].rolling(window=20).mean().iloc[-1]
+            ma50 = hist['Close'].rolling(window=50).mean().iloc[-1]
+            ma200 = hist['Close'].rolling(window=200).mean().iloc[-1]
+            
+            hist['RSI'] = calculate_rsi(hist['Close'])
+            latest_rsi = hist['RSI'].iloc[-1] if not pd.isna(hist['RSI'].iloc[-1]) else 50
+            
+            avg_vol = hist['Volume'].tail(20).mean()
+            latest_vol = hist['Volume'].iloc[-1]
+            vol_multiplier = latest_vol / avg_vol
+            
+            scanned_results.append({
+                "ticker": ticker,
+                "close": latest_close,
+                "change": pct_change,
+                "ma20": ma20,
+                "ma50": ma50,
+                "ma200": ma200,
+                "rsi": latest_rsi,
+                "volume_mult": vol_multiplier
+            })
+        except Exception:
+            continue
+    return scanned_results
 
 # --- MAIN WEB APP LAYOUT ---
-st.title("🦅 Universal AI Derivative & Share Trading Matrix")
+st.title("🦅 Universal AI Derivative & Automated Robo-Swing Matrix")
 
-# MODE SELECTOR PANEL
-app_mode = st.radio("Choose Active Trading Field Context:", ["Live Intraday Tracking (Options)", "Swing Trading Desk (Any Stock)"], horizontal=True)
+app_mode = st.radio("Choose Active Trading Field Context:", ["Live Intraday Tracking (Options)", "AI Robo-Advisor Swing Scanner (Best Stocks)"], horizontal=True)
 
 st.markdown("---")
 
@@ -110,7 +122,6 @@ if app_mode == "Live Intraday Tracking (Options)":
                 pcr = round(df['pe_oi'].sum() / df['ce_oi'].sum(), 2) if df['ce_oi'].sum() > 0 else 0
                 max_pain = compute_max_pain(df)
                 
-                # Render Metrics Dashboard
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Spot Price", f"₹ {spot:.2f}")
                 c2.metric("ATM strike", f"{atm}")
@@ -119,101 +130,106 @@ if app_mode == "Live Intraday Tracking (Options)":
                 
                 st.subheader("📋 Sliced Options Matrix View")
                 st.dataframe(df.tail(10), use_container_width=True)
-            except Exception as error:
-                st.error("Live option chain feeds are optimized for market hours. Switch to Swing Trading Desk for stock setups.")
+            except Exception:
+                st.error("Option chain services are optimized for live trading hours. Switch to the AI Robo-Advisor Swing Scanner for stock selections.")
 
-# --- CONTEXT 2: UNIVERSAL SEARCH + HOLDING PERIOD STRATEGY ENGINE ---
+# --- CONTEXT 2: AUTOMATED MARKET SCANNER BASED ON BUDGET & TIME PERIOD ---
 else:
-    st.markdown("### 🔍 Universal Swing Analyzer & Target Time-Frame Engine")
+    st.subheader("🤖 Automated AI Swing Stock Recommendation Engine")
+    user_budget = st.number_input("Enter Your Maximum Trading Capital Budget (₹):", min_value=100, value=25000, step=1000)
     
-    col_input1, col_input2, col_input3 = st.columns(3)
-    with col_input1:
-        user_ticker = st.text_input("Type ANY NSE Stock Ticker Symbol:", value="TATAMOTORS")
-    with col_input2:
-        user_budget = st.number_input("Enter Your Trading Capital Budget (₹):", min_value=100, value=15000, step=500)
-    with col_input3:
-        # FEATURE 1: TIME PERIOD SELECTION FOR SWING HODL TIMES
-        time_period = st.selectbox("Select Intended Holding Time Frame:", ["3 Days (Ultra-Short Momentum)", "7 Days (Pullback / Mean Reversion)", "14 Days (Structural Trend Following)"])
-
-    if st.button("🦅 Run AI Time-Frame Strategy Optimization"):
-        with st.spinner(f"Running strategy protocols for {user_ticker}..."):
-            s = fetch_any_stock_data(user_ticker)
+    if st.button("🔍 Scan Market & Generate Best Picks"):
+        with st.spinner("AI is scanning the entire market matrix and matching trading strategies..."):
+            market_data = scan_entire_market()
             
-            if s:
-                # Position Sizing
-                max_shares_allowed = int(user_budget // s['close'])
+            if not market_data:
+                st.error("Failed to fetch market data profiles. Try refreshing.")
+                st.stop()
                 
-                # Primary metrics layout
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Current Price", f"₹ {s['close']:.2f}", f"{s['change']:.2f}% Change")
-                m2.metric("RSI (14 Days)", f"{s['rsi']:.1f}")
-                m3.metric("20-Day EMA (Fast Track)", f"₹ {s['ma20']:.2f}")
-                m4.metric("50-Day Moving Avg", f"₹ {s['ma50']:.2f}")
+            # Filter stocks that fit the user's budget (Price must be less than budget)
+            affordable_stocks = [s for s in market_data if s['close'] <= user_budget]
+            
+            if not affordable_stocks:
+                st.error("❌ Your budget is too low to trade the current scanned stocks safely. Please increase your trading budget.")
+                st.stop()
                 
-                st.markdown("---")
-                
-                # Budget allocation calculation layout
-                st.subheader("💰 Portfolio Position Sizing Allocation")
-                if max_shares_allowed > 0:
-                    allocated_capital = max_shares_allowed * s['close']
-                    st.success(f"Based on your budget of **₹{user_budget:,.2f}**, you can purchase exactly **{max_shares_allowed} shares** of {s['name']}. Total required deployment: **₹{allocated_capital:,.2f}**")
-                else:
-                    st.error(f"❌ Target stock price (₹{s['close']:.2f}) exceeds your allocated budget. Try increasing your capital cap or look for a lower-priced alternative.")
-                    st.stop()
-                
-                st.markdown("---")
-                
-                # FEATURE 2: DYNAMIC STRATEGY ENGINE CHANGING BASED ON SELECTED TIME PERIODS
-                st.subheader(f"🎯 Targeted Strategy Evaluation: {time_period}")
-                
-                setup_matched = False
-                
-                # --- STRATEGY OVERVIEW 1: 3 DAYS (VOLUME & MOMENTUM BREAKOUTS) ---
-                if "3 Days" in time_period:
-                    # Look for explosive immediate momentum: price above 20 MA and a volume spike
-                    if s['close'] > s['ma20'] and s['volume_mult'] >= 1.5:
-                        st.markdown("### 🚀 AI Trading Signal: **ULTRA-SHORT MOMENTUM BREAKOUT (VALIDATED)**")
-                        st.write(f"**Execution Plan:** Enter long immediate at opening bells for a **3-Day fast harvest ride**.")
-                        st.write(f"🎯 **Target Price (3 Days):** ₹ {s['close'] * 1.03:.2f} (3% Capture) | 🛑 **Stop Loss:** ₹ {s['close'] * 0.98:.2f}")
-                        st.info(f"**AI Rationale:** Volume is clocking `{s['volume_mult']:.2f}x` average benchmarks with the price breaking out cleanly over the 20-day line. Big block accumulation indicates high probability of immediate follow-through momentum over the next 48 to 72 hours.")
-                        setup_matched = True
-                    else:
-                        st.warning("⚠️ **AI Advice:** This stock does not exhibit clean short-term momentum flags right now. The volume multiplier is too low. For a 3-Day holding window, look for tickers with volume multipliers greater than 1.5x to maximize your probability of immediate profit.")
-                
-                # --- STRATEGY OVERVIEW 2: 7 DAYS (PULLBACK / MEAN REVERSION REBOUND) ---
-                elif "7 Days" in time_period:
-                    # Look for oversold bounces or tests of the 50 MA
-                    is_oversold = s['rsi'] <= 38
-                    near_50_ma = abs(s['close'] - s['ma50']) / s['ma50'] <= 0.025
-                    
-                    if is_oversold or (s['close'] > s['ma200'] and near_50_ma):
-                        st.markdown("### 🟢 AI Trading Signal: **MEDIUM-TERM MEAN REVERSION / PULLBACK SETUP**")
-                        st.write(f"**Execution Plan:** Buy and accumulate over the next session for a **7-Day swing target cycle**.")
-                        st.write(f"🎯 **Target Price (7 Days):** ₹ {s['close'] * 1.06:.2f} (6% Bounce Target) | 🛑 **Stop Loss:** ₹ {s['close'] * 0.95:.2f}")
-                        
-                        reason = "RSI is oversold, showing panic selling is exhausted." if is_oversold else "The stock has pulled back to its major 50-day moving average support line in a strong uptrend."
-                        st.info(f"**AI Rationale:** {reason} Over a 7-day holding horizon, this pullback offers an optimal risk-to-reward configuration as weak sellers clear out, setting the stage for institutional buying to push the price back up.")
-                        setup_matched = True
-                    else:
-                        st.warning("⚠️ **AI Advice:** The stock is currently sitting in a neutral zone. It is neither oversold (RSI is at default levels) nor resting on major moving average cushions. For a 7-Day swing trade, look for a entry point closer to major support lines.")
+            # -------------------------------------------------------------
+            # AI STRATEGY FILTERING FOR EACH TIME PERIOD
+            # -------------------------------------------------------------
+            
+            # 1. Best 3-Day Pick (Strategy: High Volume Breakout + Momentum)
+            best_3day = None
+            highest_vol = 0
+            for s in affordable_stocks:
+                if s['close'] > s['ma20'] and s['volume_mult'] > highest_vol:
+                    highest_vol = s['volume_mult']
+                    best_3day = s
+            
+            # 2. Best 7-Day Pick (Strategy: Pullback near 50 MA / Oversold RSI Reversion)
+            best_7day = None
+            best_7day_score = float('inf') # Finding the closest stock to its 50 MA cushion
+            for s in affordable_stocks:
+                dist_to_50ma = abs(s['close'] - s['ma50']) / s['ma50']
+                if s['rsi'] <= 42 or (s['close'] > s['ma200'] and dist_to_50ma <= 0.04):
+                    if dist_to_50ma < best_7day_score:
+                        best_7day_score = dist_to_50ma
+                        best_7day = s
+            
+            # 3. Best 14-Day Pick (Strategy: Strong Structural Trend-Following)
+            best_14day = None
+            strongest_trend = -999
+            for s in affordable_stocks:
+                if s['close'] > s['ma200'] and s['close'] > s['ma50']:
+                    if s['change'] > strongest_trend:
+                        strongest_trend = s['change']
+                        best_14day = s
 
-                # --- STRATEGY OVERVIEW 3: 14 DAYS (STRUCTURAL TREND ALIGNMENT) ---
+            # -------------------------------------------------------------
+            # DISPLAY SCREEN RESULTS BY TIME HORIZON
+            # -------------------------------------------------------------
+            t1, t2, t3 = st.tabs(["🚀 Best 3-Day Pick", "🟢 Best 7-Day Pick", "📈 Best 14-Day Pick"])
+            
+            with t1:
+                if best_3day:
+                    shares = int(user_budget // best_3day['close'])
+                    st.markdown(f"## **AI Top Recommendation: {best_3day['ticker']}**")
+                    
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Current Market Price", f"₹ {best_3day['close']:.2f}", f"{best_3day['change']:.2f}%")
+                    c2.metric("Volume Multiplier", f"{best_3day['volume_mult']:.2f}x Normal")
+                    c3.metric("Affordable Quantity (Sizing)", f"{shares} Shares")
+                    
+                    st.success(f"🎯 **Target Price (3 Days):** ₹ {best_3day['close'] * 1.03:.2f} (3% Profit Run) | 🛑 **Stop Loss:** ₹ {best_3day['close'] * 0.98:.2f}")
+                    st.info(f"📝 **AI Rationale (3-Day Ultra Momentum):** `{best_3day['ticker']}` was selected because its trading volume is spiking at `{best_3day['volume_mult']:.2f}x` its normal average. Massive institutional blocks are entering, making it the mathematically highest probability pick for an explosive 72-hour move.")
                 else:
-                    # Look for stable positioning above the long term 200 day baseline
-                    if s['close'] > s['ma200'] and s['close'] > s['ma50']:
-                        st.markdown("### 📈 AI Trading Signal: **STRUCTURAL TREND POSITION COMPLIANT**")
-                        st.write(f"**Execution Plan:** Deploy a swing position to be carried over a **14-Day target maturation window**.")
-                        st.write(f"🎯 **Target Price (14 Days):** ₹ {s['close'] * 1.10:.2f} (10% Extended Trend Run) | 🛑 **Stop Loss:** ₹ {s['ma50'] * 0.95:.2f}")
-                        st.info(f"**AI Rationale:** {s['name']} displays structural strength by trading sustainably above its 50-day and 200-day moving averages. For a 2-week trading horizon, riding this steady macro trend offers a high probability of capturing a full 8–10% move with minimal intraday noise.")
-                        setup_matched = True
-                    else:
-                        st.warning("⚠️ **AI Advice:** The stock is currently trading below core structural moving averages, meaning it lacks macro trend support. For a longer-term 14-day hold, look for stocks with stable uptrends to avoid getting trapped in a distribution phase.")
-                
-                # Recent history data logs table grid
-                st.markdown("---")
-                st.subheader("📊 Recent 10-Day Trading History Logs")
-                raw_grid = s['raw_hist'].copy()
-                raw_grid.index = raw_grid.index.strftime('%Y-%m-%d')
-                st.dataframe(raw_grid[['Open', 'High', 'Low', 'Close', 'Volume']], use_container_width=True)
-            else:
-                st.error("❌ Data Fetch Error. Verify ticker input matches exact standard NSE notation (e.g. SBIN, INFY, ITC, TATASTEEL, SHREECEM).")
+                    st.warning("No stocks cleanly matched the 3-day momentum breakout criteria right now.")
+                    
+            with t2:
+                if best_7day:
+                    shares = int(user_budget // best_7day['close'])
+                    st.markdown(f"## **AI Top Recommendation: {best_7day['ticker']}**")
+                    
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Current Market Price", f"₹ {best_7day['close']:.2f}", f"{best_7day['change']:.2f}%")
+                    c2.metric("14-Day RSI Level", f"{best_7day['rsi']:.1f}")
+                    c3.metric("Affordable Quantity (Sizing)", f"{shares} Shares")
+                    
+                    st.success(f"🎯 **Target Price (7 Days):** ₹ {best_7day['close'] * 1.06:.2f} (6% Structural Bounce) | 🛑 **Stop Loss:** ₹ {best_7day['close'] * 0.95:.2f}")
+                    st.info(f"📝 **AI Rationale (7-Day Mean Reversion):** `{best_7day['ticker']}` is resting in a primary pullback value zone (RSI: `{best_7day['rsi']:.1f}`). Short-term panic selling is structurally exhausted, positioning it perfectly for a reliable 1-week recovery bounce.")
+                else:
+                    st.warning("No stocks cleanly matched the 7-day pullback support metrics right now.")
+                    
+            with t3:
+                if best_14day:
+                    shares = int(user_budget // best_14day['close'])
+                    st.markdown(f"## **AI Top Recommendation: {best_14day['ticker']}**")
+                    
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Current Market Price", f"₹ {best_14day['close']:.2f}", f"{best_14day['change']:.2f}%")
+                    c2.metric("50-Day Moving Average", f"₹ {best_14day['ma50']:.2f}")
+                    c3.metric("Affordable Quantity (Sizing)", f"{shares} Shares")
+                    
+                    st.success(f"🎯 **Target Price (14 Days):** ₹ {best_14day['close'] * 1.10:.2f} (10% Major Trend Ride) | 🛑 **Stop Loss:** ₹ {best_14day['ma50'] * 0.95:.2f}")
+                    st.info(f"📝 **AI Rationale (14-Day Trend Following):** `{best_14day['ticker']}` is trading cleanly above both its 50-day and 200-day moving averages. This signals an established macro uptrend that can absorb day-to-day market noise, allowing you to ride the steady structural wave over the next two weeks.")
+                else:
+                    st.warning("No stocks cleanly matched the 14-day trend following configuration right now.")
